@@ -7,6 +7,9 @@ import requests.compat
 import six
 
 
+site_cache = None
+
+
 class StackAPIError(Exception):
     """
     The Exception that is thrown when ever there is an API error.
@@ -28,7 +31,13 @@ class StackAPIError(Exception):
 
 
 class StackAPI(object):
-    def __init__(self, name=None, version="2.3", base_url="https://api.stackexchange.com", **kwargs):
+    def __init__(
+        self,
+        name=None,
+        version="2.3",
+        base_url="https://api.stackexchange.com",
+        **kwargs
+    ):
         """
         The object used to interact with the Stack Exchange API
 
@@ -55,7 +64,11 @@ class StackAPI(object):
         :param key: (string) (optional) An API key
         :param access_token: (string) (optional) An access token associated with an application and
             a user, to grant more permissions (such as write access)
+        :param use_site_cache: (bool) (optional) Whether StackAPI should cache the list of sites
+            instead of requesting the list each time a StackAPI object is created. Defaults to False.
         """
+        global site_cache
+
         if not name:
             raise ValueError("No Site Name provided")
 
@@ -70,8 +83,21 @@ class StackAPI(object):
         self._version = version
         self._previous_call = None
 
+        use_site_cache = kwargs.get("use_site_cache", False)
+
         self._base_url = "{}/{}/".format(base_url, version)
-        sites = self.fetch("sites", filter="!*L1*AY-85YllAr2)", pagesize=1000)
+
+        if use_site_cache and (site_cache is not None):
+            # if we're using the site and it's populated
+            sites = site_cache
+        else:
+            # in all other cases, it needs to be fetched
+            sites = self.fetch("sites", filter="!*L1*AY-85YllAr2)", pagesize=1000)
+
+            # if we want to use the cache, then cache the results
+            if use_site_cache:
+                site_cache = sites
+
         for s in sites["items"]:
             if name == s["api_site_parameter"]:
                 self._name = s["name"]
@@ -148,7 +174,9 @@ class StackAPI(object):
             if "{" + k + "}" in endpoint:
                 # using six for backwards compatibility
                 if isinstance(value, six.string_types):
-                    endpoint = endpoint.replace("{" + k + "}", requests.compat.quote_plus(str(value)))
+                    endpoint = endpoint.replace(
+                        "{" + k + "}", requests.compat.quote_plus(str(value))
+                    )
                 else:
                     # check if value is iterable, based on
                     # https://stackoverflow.com/questions/1952464/in-python-how-do-i-determine-if-an-object-is-iterable
@@ -156,11 +184,16 @@ class StackAPI(object):
                     try:
                         iterator = iter(value)
                         endpoint = endpoint.replace(
-                            "{" + k + "}", ";".join(requests.compat.quote_plus(str(x)) for x in iterator)
+                            "{" + k + "}",
+                            ";".join(
+                                requests.compat.quote_plus(str(x)) for x in iterator
+                            ),
                         )
                     except TypeError:
                         # it's not an iterable, represent as string
-                        endpoint = endpoint.replace("{" + k + "}", requests.compat.quote_plus(str(value)))
+                        endpoint = endpoint.replace(
+                            "{" + k + "}", requests.compat.quote_plus(str(value))
+                        )
 
                 kwargs.pop(k, None)
 
@@ -228,7 +261,11 @@ class StackAPI(object):
                 sleep(backoff + 1)  # Sleep an extra second to ensure no timing issues
             if "total" in response:
                 total = response["total"]
-            if "has_more" in response and response["has_more"] and run_cnt <= self.max_pages:
+            if (
+                "has_more" in response
+                and response["has_more"]
+                and run_cnt <= self.max_pages
+            ):
                 params["page"] += 1
             else:
                 break
@@ -242,7 +279,9 @@ class StackAPI(object):
             "has_more": False if "has_more" not in data[-1] else data[-1]["has_more"],
             "page": params["page"],
             "quota_max": -1 if "quota_max" not in data[-1] else data[-1]["quota_max"],
-            "quota_remaining": -1 if "quota_remaining" not in data[-1] else data[-1]["quota_remaining"],
+            "quota_remaining": -1
+            if "quota_remaining" not in data[-1]
+            else data[-1]["quota_remaining"],
             "total": total,
             "items": list(chain(r)),
         }
